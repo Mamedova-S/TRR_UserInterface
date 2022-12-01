@@ -36,7 +36,7 @@ const Navbar: React.FunctionComponent<NavbarProps> = ({
 
     useEffect(() => {
         handleConnect()
-    })
+    }, [])
 
     return <header className="p-3 text-bg-dark">
         <div className="container">

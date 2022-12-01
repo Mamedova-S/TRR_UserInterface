@@ -12,7 +12,10 @@ export default function Home() {
     const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
     const [successMessage, setSuccessMessage] = useState<string>("");
     const [errorMessage, setErrorMessage] = useState<string>("");
-    const [events, setEvents] = useState<any[]>([])
+    const [events, setEvents] = useState<any[]>([]);
+    const [addresses, setAddresses] = useState<string[]>([]);
+    const [requestCount, setRequestCount] = useState<number>(0);
+    const [currentTag, setCurrentTag] = useState<string>("");
 
     const postMessage = async () => {
         if (web3 == undefined) return;
@@ -52,6 +55,7 @@ export default function Home() {
 
     const loadTableData = async () => {
         if (web3 == undefined) return;
+        setEvents([]);
 
         let network = 0;
         network = await web3.eth.net.getId();
@@ -64,21 +68,62 @@ export default function Home() {
         try {
             const poster = new web3.eth.Contract(PosterABI as AbiItem[], process.env.NEXT_PUBLIC_CONTRACT_ADDRESS);
             
-            await poster.getPastEvents("NewPost", {fromBlock: 29233040 , toBlock: 29233540 }, (error, events) => { console.log(error); if (events) {console.log(`events1 - ${events}`); setEvents(events); }});
-            console.log(`events2 - ${events}`);
+            const latest = await web3.eth.getBlockNumber();
+            
+            const min_block_number = 29436142;
+            let timeout = 0;
+            for(let i = latest; i >= min_block_number; i -= 1000)
+            {
+                const from = i - 1000 < min_block_number ? min_block_number : i - 1000;
+                const to = i;
+
+                setTimeout(getPastEvents , timeout, poster, from, to);
+                setRequestCount((count) => count + 1);
+                timeout += 27;
+            }
+            setRequestCount((count) => count - 1);
         } catch (e) {
             console.log(e);
         }
     };
 
-    // useEffect(() => {
-    //     loadTableData()
-    // });
+    const getPastEvents = async (poster, from, to) => {
+        await poster.getPastEvents(
+            "NewPost", 
+            {fromBlock: from , toBlock: to}, 
+            (error, _events) => { 
+                console.log(error);
+                if (_events) {
+                    const addressList = [];
+                    _events.forEach(event => {
+                        const address = web3.eth.abi.decodeParameter('address', event.raw.topics[1]);
+                        if (!addressList.includes(address))
+                            addressList.push(address);
+                    });
+                    setAddresses((_addresses) => [..._addresses, ...addressList]);
+                    setEvents((eventList) => [...eventList, ..._events]); 
+                }
+            })
+        setRequestCount((count) => count - 1);
+};
+
+    const onLoginHandler = () => {
+        setWeb3(window.web3);
+        setIsAuthorized(true);
+    };
+
+    const onChangeTag = (event: any) => {
+        setCurrentTag(event.target.value);
+    };
+
+    useEffect(() => {
+        loadTableData();
+    }, [web3]);
 
     return (
         <>
             <Navbar
-                onLogin={() => { setWeb3(window.web3); setIsAuthorized(true) }}
+                onLogin={onLoginHandler}
             />
             <main className="container ">
                 <div className="text-center mx-auto" style={{ maxWidth: 350 }}>
@@ -92,31 +137,56 @@ export default function Home() {
                         <label className="text-white" htmlFor="tagInput">Tag</label>
                     </div>
                     <button className="w-100 btn btn-lg btn-primary mb-3" onClick={postMessage} disabled={!isAuthorized}>Post</button>
-                    {successMessage != "" && (<div className="alert alert-success" role="alert">{successMessage}</div>)}
-                    {errorMessage != "" && (<div className="alert alert-danger" role="alert">{errorMessage}</div>)}
+                    {successMessage != "" && (<div className="alert alert-success" role="alert" style={{"word-break": "break-word"}}>{successMessage}</div>)}
+                    {errorMessage != "" && (<div className="alert alert-danger" role="alert" style={{"word-break": "break-word"}}>{errorMessage}</div>)}
                 </div>
                 
-                <button className="mw-25 btn btn-lg btn-primary mb-3" onClick={loadTableData}>Load Data</button>
-                <div className="text-center mx-auto">
-                    <table className="table table-dark table-striped table-hover">
-                        <thead>
-                            <tr>
-                                <th scope="col">#</th>
-                                <th scope="col">User Address</th>
-                                <th scope="col">Tag</th>
-                                <th scope="col">Content</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {events.map((event, index) => (<tr key={`event_${index}`}>
-                                <td>{index + 1}</td>
-                                <td>{event.address}</td>
-                                <td>{/*web3?.utils.toUtf8(event.raw.topics[2])*/}</td>
-                                <td>{/* web3?.utils.toUtf8(event.raw.data)*/}</td>
-                            </tr>))}
-                        </tbody>
-                    </table>
-                </div>
+                {web3 && addresses.includes(web3.eth.defaultAccount) && 
+                <div className="text-center mx-auto mt-3">
+                    <form className="d-flex flex-row-reverse">
+                        <div className="py-2 col-auto">
+                            <label htmlFor="inputTag" className="visually-hidden text-white">Tag</label>
+                            <input type="text" className="form-control form-control-dark text-bg-dark" id="inputTag" placeholder="Tag" onChange={onChangeTag}/>
+                        </div>
+                    </form>
+                    {requestCount >= 0 ? 
+                        (<div className="spinner-border" role="status">
+                            <span className="visually-hidden">Loading...</span>
+                        </div>)
+                        : (<table className="table table-dark table-striped table-hover">
+                            <thead>
+                                <tr>
+                                    <th scope="col">#</th>
+                                    <th scope="col">User Address</th>
+                                    <th scope="col">Tag</th>
+                                    <th scope="col">Content</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {events.map((event, index) => {
+                                    const address = web3.eth.abi.decodeParameter('address', event.raw.topics[1]);
+
+                                    const data = web3.eth.abi.decodeParameters([{
+                                        type: 'string',
+                                        name: 'content'
+                                    },{
+                                        type: 'string',
+                                        name: 'tag'
+                                    }], event.raw.data)
+
+                                    if (data.tag.toLowerCase().includes(currentTag.toLowerCase()))
+                                        return (
+                                        <tr key={`event_${index}`}>
+                                            <td>{index + 1}</td>
+                                            <td>{address}</td>
+                                            <td>{data.tag}</td>
+                                            <td>{data.content}</td>
+                                        </tr>)
+                                })}
+                            </tbody>
+                        </table>)
+                    }
+                </div>}
             </main>
         </>
     )
